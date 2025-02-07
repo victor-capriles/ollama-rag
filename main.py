@@ -34,7 +34,7 @@ async def start():
     index = VectorStoreIndex.from_documents(documents, show_progress=True)
     index.storage_context.persist(persist_dir="./storage")
 
-    # query engine
+    #
     query_engine = index.as_query_engine(llm=Settings.llm, embed_model=Settings.embed_model, streaming=True,
                                          similarity_top_k=5)
     cl.user_session.set("query_engine", query_engine)
