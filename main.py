@@ -1,61 +1,71 @@
-from llama_index.core import (
-    Settings,
-    StorageContext,
-    VectorStoreIndex,
-    SimpleDirectoryReader,
-    load_index_from_storage
-)
-from llama_index.core.indices.vector_store import VectorIndexRetriever
-from llama_index.core.query_engine.retriever_query_engine import RetrieverQueryEngine
-from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core import Settings
-from llama_index.llms.ollama import Ollama
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from langchain_community.document_loaders import DirectoryLoader
+from langchain_community.document_loaders.pdf import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain_ollama import ChatOllama
+from langchain.prompts import ChatPromptTemplate
+from langchain.schema import StrOutputParser
+from langchain.schema.runnable import Runnable
+from langchain.schema.runnable.config import RunnableConfig
 import chainlit as cl
-from sympy.polys.polyconfig import query
-from urllib3.contrib.emscripten.fetch import streaming_ready
+
+# define the folder path where your PDFs (resumes) are stored
+pdf_folder_path = "./pdf"
+# load all PDFs in the directory using DirectoryLoader
+loader = DirectoryLoader(pdf_folder_path, loader_cls=PyPDFLoader)
+documents = loader.load()
+
+# initialize splitter and split loaded docs into chunks
+recursive_splitter = RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=51)
+chunked_documents = recursive_splitter.split_documents(documents)
+
+# initialize the model using HuggingFaceEmbeddings wrapper
+embedding_model = HuggingFaceEmbeddings(model_name="all-minilm-l6-v2")
+
+# Create chroma vector database from documents
+vectordb = Chroma.from_documents(
+    documents=chunked_documents,  # chunks we created earlier
+    embedding=embedding_model, # embeddings we initialized earlier
+    persist_directory="db-allmini"
+)
 
 @cl.on_chat_start
-async def start():
-    llm = Ollama(model="llama2", streaming=True)
-    embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/multi-qa-mpnet-base-dot-v1")
-    Settings.llm = llm
-    Settings.embed_model = embed_model
+async def on_chat_start():
+    # declare the mode
+    llm = ChatOllama(model="llama3.2", temperature=0.5, streaming=True)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system",
+             "You are a refined and courteous butler. Your responses are always polite and respectful additionally,"
+             "you must answer any question with a touch of sophistication. **Don't** make up information. "),
+            ("human", "{question}")
+        ]
+    )
 
-    # read documents
-    reader = SimpleDirectoryReader('./pdf')
-    documents = reader.load_data()
-
-    # split documents into chunks
-    text_splitter = SentenceSplitter(chunk_size=512, chunk_overlap=51)
-    nodes = text_splitter.get_nodes_from_documents(documents, show_progress=True)
-
-    #
-    index = VectorStoreIndex.from_documents(documents, show_progress=True)
-    index.storage_context.persist(persist_dir="./storage")
-
-    #
-    query_engine = index.as_query_engine(llm=Settings.llm, embed_model=Settings.embed_model, streaming=True,
-                                         similarity_top_k=5)
-    cl.user_session.set("query_engine", query_engine)
+    runnable = prompt | llm | StrOutputParser()
+    cl.user_session.set("runnable", runnable)
 
 @cl.on_message
-async def main(message: cl.Message):
-    query_engine = cl.user_session.get("query_engine")  # type: RetrieverQueryEngine
-    msg = cl.Message(content="", author="Assistant")
+async def on_message(message: cl.Message):
+    runnable = cl.user_session.get("runnable")
 
-    # Use combined string as the input for the query | query is processed and nodes are sent to the llm
-    res = await cl.make_async(query_engine.query)(message.content)
+    question = message.content
 
-    # Stream the response tokens to the user
-    for token in res.response_gen:
-        await msg.stream_token(token)
+    retrieved_docs = vectordb.similarity_search(question, k=3)
+    context = "\n".join([doc.page_content for doc in retrieved_docs])
+
+    # Augment the user's question with the retrieved context
+    augmented_input = f"Context:\n{context}\n\nQuestion: {question}"
+
+    # Create a new Chainlit message that will stream tokens
+    msg = cl.Message(content="")
+
+    # Use asynchronous streaming to process and stream tokens to the user.
+    async for chunk in runnable.astream(
+        {"question": augmented_input},
+        config=RunnableConfig(callbacks=[cl.LangchainCallbackHandler()]),
+    ):
+        await msg.stream_token(chunk)
 
     await msg.send()
-
-
-
-
-
-
-
