@@ -55,7 +55,6 @@ async def on_message(message: cl.Message):
 
     retrieved_docs = vectordb.similarity_search(question, k=8)
     context = "\n".join([doc.page_content for doc in retrieved_docs])
-    print(retrieved_docs)
 
     # Augment the user's question with the retrieved context
     augmented_input = f"Context:\n{context}\n\nQuestion: {question}"
