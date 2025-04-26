@@ -4,12 +4,6 @@ Ollama-RAG is a local LLM chatbot that uses LangGraph's workflow to decide when 
 
 👉 Want to learn how it works step-by-step? Check out my Medium article: [Simple RAG Application with Ollama](https://medium.com/@vdcapriles/simple-rag-application-with-ollama-and-langgraph-259450772903).
 
-## Demo
-
-Here's a video:
-
-
-
 ## 🧩 How does the application works?
 
 The app uses LangGraph to create a branching workflow. Depending on the input, it either:
